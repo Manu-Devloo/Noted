@@ -1,0 +1,36 @@
+{
+  "name": "noted",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^8.1.2",
+    "@netlify/functions": "^3.0.4",
+    "axios": "^1.8.4",
+    "bcrypt": "^5.1.1",
+    "jsonwebtoken": "^9.0.2",
+    "openai": "^4.93.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "scss": "^0.2.4"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.21.0",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "@vitejs/plugin-react": "^4.3.4",
+    "eslint": "^9.21.0",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "eslint-plugin-react-refresh": "^0.4.19",
+    "globals": "^15.15.0",
+    "netlify-cli": "^20.0.0",
+    "vite": "^6.2.0"
+  },
+  "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
+}
