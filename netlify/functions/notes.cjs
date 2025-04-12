@@ -86,11 +86,11 @@ You are an assistant that processes handwritten or typed notes and converts them
 
 Your job is to:
 
-Extract the content of the note (If you get an image you will transcribe text to the best of your ability, most of the times the text will be in dutch).
+Extract the content of the note (If you get an image you will get the needed info from the image to the best of your ability, most of the times the text in the image will be in dutch).
 Summarize the key points in 1–2 sentences.
 Classify the note into 1 or more relevant categories from the provided list.
 Only use categories from this list: ${JSON.stringify(existingCategories)}
-If none of these categories seem appropriate, you MUST use the category "Miscellaneous". Do NOT invent new categories.
+If none of these categories seem appropriate, you can use the category "Miscellaneous". Or invent a new one if really needed.
 
 Return everything in the following JSON format:
 {
@@ -100,7 +100,7 @@ Return everything in the following JSON format:
 "categories": ["Category1", "Category2"]
 }
 
-Always return this exact JSON format. Do not include a 'new_category' field.
+Always return this exact JSON format, DO NOT USE MARKDOWN.
 
 Note Content:
 ${noteContent}
@@ -153,41 +153,31 @@ exports.handler = async (event, context) => {
         let noteInput;
         let isBase64 = false;
         let contentType = event.headers['content-type'] || '';        // Check if it's multipart/form-data (likely image upload) or JSON (text)
-        if (event.isBase64Encoded && contentType.startsWith('multipart/form-data')) {
-             // Basic handling for base64 encoded image data - assumes single file part
-             // More robust parsing might be needed for complex forms
-             // This assumes the body contains the base64 encoded file content directly
-             // or needs extraction based on boundary (which is complex without libraries)
-             // For simplicity, let's assume the frontend sends base64 string in a JSON payload for now
-             // If direct multipart upload is used, a library like 'busboy' or 'lambda-multipart-parser' is needed
-             try {
+        if (contentType.startsWith('application/json')) {
+            try {
                 const body = JSON.parse(event.body);
+
                 if (body.image) {
                     noteInput = body.image; // Assuming base64 image string
                     isBase64 = true;
+
                 } else if (body.images && Array.isArray(body.images)) {
                     // Handle multiple images case
                     noteInput = body.images;
                     isBase64 = true;
-                } else {
-                     return { statusCode: 400, body: JSON.stringify({ message: 'Invalid image upload format.' }) };
-                }
-             } catch (e) {
-                 return { statusCode: 400, body: JSON.stringify({ message: 'Invalid request body for image upload.' }) };
-             }
 
-        } else if (contentType.startsWith('application/json')) {
-            try {
-                const body = JSON.parse(event.body);
-                noteInput = body.text;
+                } else {
+                    noteInput = body.text;
+                }
+
                 if (!noteInput) {
-                    return { statusCode: 400, body: JSON.stringify({ message: 'Note text is required.' }) };
+                    return { statusCode: 400, body: JSON.stringify({ message: 'Note text or image is required.' }) };
                 }
             } catch (e) {
                  return { statusCode: 400, body: JSON.stringify({ message: 'Invalid JSON body.' }) };
             }
         } else {
-             return { statusCode: 400, body: JSON.stringify({ message: 'Unsupported content type. Use application/json or multipart/form-data (with image field).' }) };
+             return { statusCode: 400, body: JSON.stringify({ message: 'Unsupported content type. Use application/json' }) };
         }
 
 
@@ -221,7 +211,7 @@ exports.handler = async (event, context) => {
                                 content: contentArray,
                             },
                         ],
-                        max_tokens: 1500, // Increased for multiple images
+                        max_tokens: 4000, // Increased for multiple images
                     });
                 } else {
                     // Single image case
@@ -240,7 +230,7 @@ exports.handler = async (event, context) => {
                                 ],
                             },
                         ],
-                        max_tokens: 1000, // Adjust as needed
+                        max_tokens: 4000, // Adjust as needed
                     });
                 }
             } else {
@@ -254,6 +244,7 @@ exports.handler = async (event, context) => {
 
 
             let noteData;
+
             try {
                  // Extract the JSON string from the response
                  const jsonString = completion.choices[0].message.content;
