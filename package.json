@@ -14,8 +14,10 @@
     "@netlify/functions": "^3.0.4",
     "axios": "^1.8.4",
     "bcrypt": "^5.1.1",
+    "date-fns": "^4.1.0",
     "jsonwebtoken": "^9.0.2",
     "openai": "^4.93.0",
+    "prop-types": "^15.8.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "scss": "^0.2.4"
