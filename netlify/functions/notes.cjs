@@ -146,31 +146,39 @@ exports.handler = async (event, context) => {
     }
     const { username } = authResult.user;
     const notesStore = getNotesStore(username);
-    // No need to get categoriesStore here unless specifically needed outside functions
-
-    // Create Note
+    // No need to get categoriesStore here unless specifically needed outside functions    // Create Note
     if (path === '' && method === 'POST') {
         let noteInput;
         let isBase64 = false;
+        let isMultipart = false;
+        let partIndex = 0;
+        let totalParts = 1;
+        let noteId = null;
         let contentType = event.headers['content-type'] || '';        // Check if it's multipart/form-data (likely image upload) or JSON (text)
         if (contentType.startsWith('application/json')) {
             try {
                 const body = JSON.parse(event.body);
 
+                // Check if this is part of a chunked upload
+                if (body.isMultipart) {
+                    isMultipart = true;
+                    partIndex = body.partIndex || 0;
+                    totalParts = body.totalParts || 1;
+                    noteId = body.noteId || null;
+                }
+
                 if (body.image) {
                     noteInput = body.image; // Assuming base64 image string
                     isBase64 = true;
-
                 } else if (body.images && Array.isArray(body.images)) {
                     // Handle multiple images case
                     noteInput = body.images;
                     isBase64 = true;
-
                 } else {
                     noteInput = body.text;
                 }
 
-                if (!noteInput) {
+                if (!noteInput && !isMultipart) {
                     return { statusCode: 400, body: JSON.stringify({ message: 'Note text or image is required.' }) };
                 }
             } catch (e) {
@@ -184,8 +192,7 @@ exports.handler = async (event, context) => {
         try {
             // Fetch existing categories before calling OpenAI
             const existingCategories = await getExistingCategories(username);            let completion;
-            if (isBase64) {
-                if (Array.isArray(noteInput)) {
+            if (isBase64) {                if (Array.isArray(noteInput)) {
                     // Handle multiple images
                     // Create content array with the text prompt and all images
                     const contentArray = [
@@ -194,10 +201,15 @@ exports.handler = async (event, context) => {
                     
                     // Add each image to the content array
                     noteInput.forEach(image => {
+                        // Check if the image is already a complete data URL
+                        const imageUrl = image.base64.startsWith('data:') 
+                            ? image.base64 
+                            : `data:image/jpeg;base64,${image.base64}`;
+                            
                         contentArray.push({
                             type: "image_url",
                             image_url: {
-                                "url": `data:image/jpeg;base64,${image.base64}`,
+                                "url": imageUrl,
                             },
                         });
                     });
@@ -215,6 +227,11 @@ exports.handler = async (event, context) => {
                     });
                 } else {
                     // Single image case
+                    // Check if the image is already a complete data URL
+                    const imageUrl = noteInput.startsWith('data:') 
+                        ? noteInput 
+                        : `data:image/jpeg;base64,${noteInput}`;
+                        
                     completion = await openai.chat.completions.create({
                         model: "gpt-4o", // Or the latest vision model
                         messages: [
@@ -222,10 +239,11 @@ exports.handler = async (event, context) => {
                                 role: "user",
                                 content: [
                                     { type: "text", text: createOpenAIPrompt("Image content below:", existingCategories) }, // Pass categories
-                                    {                                type: "image_url",
-                                image_url: {
-                                    "url": noteInput, // Using the full data URL from frontend
-                                },
+                                    {
+                                        type: "image_url",
+                                        image_url: {
+                                            "url": imageUrl,
+                                        },
                                     },
                                 ],
                             },
@@ -351,9 +369,126 @@ exports.handler = async (event, context) => {
         } catch (error) {
              console.error('Error deleting note:', error);
             return { statusCode: 500, body: JSON.stringify({ message: 'Failed to delete note.' }) };
+        }    }    
+    
+    // Handle appending to an existing note (for chunked uploads)
+    if (path === '/append' && method === 'POST') {
+        try {
+            const body = JSON.parse(event.body);
+            
+            // Validate required parameters
+            if (!body.noteId || !body.images || !Array.isArray(body.images)) {
+                return { statusCode: 400, body: JSON.stringify({ message: 'Missing required parameters for append operation' }) };
+            }
+            
+            const noteId = body.noteId;
+            const images = body.images;
+            const partIndex = body.partIndex || 0;
+            const totalParts = body.totalParts || 1;
+            
+            // Fetch the existing note
+            let existingNote;
+            try {
+                existingNote = await notesStore.get(noteId, { type: 'json' });
+                if (!existingNote) {
+                    return { statusCode: 404, body: JSON.stringify({ message: 'Note not found' }) };
+                }
+            } catch (error) {
+                if (error.status === 404) {
+                    return { statusCode: 404, body: JSON.stringify({ message: 'Note not found' }) };
+                }
+                throw error;
+            }
+            
+            // Fetch existing categories for AI processing
+            const existingCategories = await getExistingCategories(username);
+            
+            // Process the new images with OpenAI
+            const contentArray = [
+                { type: "text", text: createOpenAIPrompt(`Additional content from images (part ${partIndex + 1} of ${totalParts}):`, existingCategories) }
+            ];
+            
+            // Add each image to the content array
+            images.forEach(image => {
+                const imageUrl = image.base64.startsWith('data:') 
+                    ? image.base64 
+                    : `data:image/jpeg;base64,${image.base64}`;
+                    
+                contentArray.push({
+                    type: "image_url",
+                    image_url: {
+                        "url": imageUrl,
+                    },
+                });
+            });
+            
+            // Create completion request with the new images
+            const completion = await openai.chat.completions.create({
+                model: "gpt-4o",
+                messages: [
+                    {
+                        role: "user",
+                        content: contentArray,
+                    },
+                ],
+                max_tokens: 4000,
+            });
+            
+            // Parse the AI response
+            let newContentData;
+            try {
+                const jsonString = completion.choices[0].message.content;
+                newContentData = JSON.parse(jsonString);
+            } catch (parseError) {
+                console.error("Error parsing OpenAI response for append:", parseError);
+                const match = completion.choices[0].message.content.match(/```json\\n([\\s\\S]*?)\\n```/);
+                if (match && match[1]) {
+                    try {
+                        newContentData = JSON.parse(match[1]);
+                    } catch (nestedParseError) {
+                        return { statusCode: 500, body: JSON.stringify({ message: 'Error processing additional images: Invalid format from AI.' }) };
+                    }
+                } else {
+                    return { statusCode: 500, body: JSON.stringify({ message: 'Error processing additional images: Invalid format from AI.' }) };
+                }
+            }
+            
+            // Merge the new content with the existing note
+            const updatedNote = {
+                ...existingNote,
+                title: existingNote.title, // Keep the original title
+                content: existingNote.content + "\n\n" + newContentData.content,
+                summary: existingNote.summary + " " + newContentData.summary,
+                // Combine and deduplicate categories
+                categories: [...new Set([...existingNote.categories, ...newContentData.categories])],
+                updatedAt: formatISO(new Date())
+            };
+            
+            // Save the updated note
+            await notesStore.setJSON(noteId, updatedNote);
+            
+            // Update categories if needed
+            updateCategories(username, newContentData.categories).catch(err => {
+                console.error("Background category update failed during append:", err);
+            });
+            
+            return { 
+                statusCode: 200, 
+                body: JSON.stringify({ 
+                    id: noteId, 
+                    ...updatedNote,
+                    message: `Successfully appended part ${partIndex + 1} of ${totalParts}`
+                }) 
+            };
+            
+        } catch (error) {
+            console.error('Error appending to note:', error);
+            if (error.response) {
+                console.error('OpenAI API Error during append:', error.response.status, error.response.data);
+            }
+            return { statusCode: 500, body: JSON.stringify({ message: 'Failed to append to note.' }) };
         }
-    }    // Endpoint to specifically get categories for the frontend filter
-
+    }
 
     return { statusCode: 404, body: JSON.stringify({ message: 'Not Found' }) };
 };

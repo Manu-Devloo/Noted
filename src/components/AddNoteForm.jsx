@@ -100,36 +100,168 @@ function AddNoteForm({ token, onNoteAdded, setIsLoading, isLoading }) {
       setError(err.message || 'An unexpected error occurred.');
       setIsLoading(false); // Ensure loading state is reset on top-level error
     }
-  };
-  // Helper function to read file as base64
+  };  // Helper function to read file as base64 with image resizing
   const readFileAsBase64 = (file) => {
     return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = () => {
-        // Keep the complete data URL including MIME type prefix
-        const base64String = reader.result;
-        resolve(base64String);
+      // Only resize images, pass through other file types
+      if (!file.type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = (error) => reject(error);
+        return;
+      }
+
+      // For images, resize before encoding to base64
+      const img = new Image();
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      const objectUrl = URL.createObjectURL(file);
+      
+      img.onload = () => {
+        URL.revokeObjectURL(objectUrl);
+        
+        // More aggressive resizing to further reduce processing time
+        // Target dimensions - limit width/height to 800px max (reduced from 1200px)
+        const MAX_WIDTH = 800;
+        const MAX_HEIGHT = 800;
+        let width = img.width;
+        let height = img.height;
+        
+        // Calculate new dimensions while maintaining aspect ratio
+        if (width > height) {
+          if (width > MAX_WIDTH) {
+            height *= MAX_WIDTH / width;
+            width = MAX_WIDTH;
+          }
+        } else {
+          if (height > MAX_HEIGHT) {
+            width *= MAX_HEIGHT / height;
+            height = MAX_HEIGHT;
+          }
+        }
+        
+        // Set canvas size and draw resized image
+        canvas.width = width;
+        canvas.height = height;
+        ctx.drawImage(img, 0, 0, width, height);
+        
+        // Convert canvas to base64 with lower quality for faster processing
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.7); // Reduced quality to 70% (from 85%)
+        resolve(dataUrl);
       };
-      reader.onerror = (error) => reject(error);
+      
+      img.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error('Failed to load image'));
+      };
+      
+      img.src = objectUrl;
     });
   };
-
   const sendNoteRequest = async (requestBody, headers) => {
     try {
-      const response = await fetch(`${API_BASE}/notes`, {
+      // Check if this is a large payload that needs to be split
+      const payloadSize = new Blob([requestBody]).size;
+      const MAX_PAYLOAD_SIZE = 6 * 1024 * 1024; // 6MB in bytes
+      
+      // If it's a regular text note or small enough image, send as normal
+      if (payloadSize <= MAX_PAYLOAD_SIZE) {
+        const response = await fetch(`${API_BASE}/notes`, {
+          method: 'POST',
+          headers: headers,
+          body: requestBody,
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.message || `Failed to add note (${response.status})`);
+        }
+        onNoteAdded(data); // Pass the new note data up to the parent
+        setNewNoteText('');
+        setNewNoteImages([]); // Clear file input
+        setError(null);
+        return;
+      }
+        // For large multi-image payloads, we need to split them
+      console.log(`Payload size (${(payloadSize / 1024 / 1024).toFixed(2)}MB) exceeds limit, splitting into chunks`);
+      
+      // Parse the original request to get the images array
+      const originalRequest = JSON.parse(requestBody);
+      if (!originalRequest.images || !Array.isArray(originalRequest.images)) {
+        throw new Error("Expected images array for chunked upload");
+      }
+      
+      // More aggressive splitting strategy - process images individually or in very small groups
+      // This prevents timeouts by keeping each request small and quick to process
+      const allImages = [...originalRequest.images];
+      const MAX_IMAGES_PER_CHUNK = 2; // Process at most 2 images at a time to avoid timeouts
+      const chunks = [];
+      
+      // Create chunks with at most MAX_IMAGES_PER_CHUNK images
+      for (let i = 0; i < allImages.length; i += MAX_IMAGES_PER_CHUNK) {
+        chunks.push(allImages.slice(i, i + MAX_IMAGES_PER_CHUNK));
+      }
+      
+      console.log(`Split ${allImages.length} images into ${chunks.length} smaller chunks`);
+      
+      // Process the first chunk to get the initial AI analysis
+      const firstChunkBody = JSON.stringify({
+        text: originalRequest.text || "Note from multiple images",
+        images: chunks[0],
+        isMultipart: true,
+        partIndex: 0,
+        totalParts: chunks.length
+      });
+      
+      const firstResponse = await fetch(`${API_BASE}/notes`, {
         method: 'POST',
         headers: headers,
-        body: requestBody,
+        body: firstChunkBody,
       });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.message || `Failed to add note (${response.status})`);
+      
+      let resultData = await firstResponse.json();
+      if (!firstResponse.ok) {
+        throw new Error(resultData.message || `Failed to process first chunk (${firstResponse.status})`);
       }
-      onNoteAdded(data); // Pass the new note data up to the parent
+      
+      // If there are more chunks, process them and update the note
+      if (chunks.length > 1) {
+        const noteId = resultData.id;
+        
+        // Process remaining chunks sequentially
+        for (let i = 1; i < chunks.length; i++) {
+          const chunkBody = JSON.stringify({
+            images: chunks[i],
+            isMultipart: true,
+            partIndex: i,
+            totalParts: chunks.length,
+            noteId: noteId
+          });
+          
+          // Set a custom status message during processing
+          setError(`Processing chunk ${i + 1} of ${chunks.length}...`);
+          
+          const chunkResponse = await fetch(`${API_BASE}/notes/append`, {
+            method: 'POST',
+            headers: headers,
+            body: chunkBody,
+          });
+          
+          const chunkResult = await chunkResponse.json();
+          if (!chunkResponse.ok) {
+            throw new Error(chunkResult.message || `Failed to process chunk ${i + 1} (${chunkResponse.status})`);
+          }
+          
+          // Update with the latest complete data
+          resultData = chunkResult;
+        }
+      }
+      
+      onNoteAdded(resultData);
       setNewNoteText('');
-      setNewNoteImages([]); // Clear file input
-      setError(null); 
+      setNewNoteImages([]);
+      setError(null);
+      
     } catch (err) {
       console.error("Error sending note request:", err);
       setError(err.message);

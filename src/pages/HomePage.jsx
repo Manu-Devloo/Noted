@@ -5,6 +5,8 @@ import Header from '../components/Header';
 import AddNoteForm from '../components/AddNoteForm';
 import FilterControls from '../components/FilterControls';
 import NoteItem from '../components/NoteItem';
+import NoteDetailModal from '../components/NoteDetailModal';
+import ChatAssistant from '../components/ChatAssistant';
 
 const API_BASE = '/.netlify/functions';
 
@@ -17,6 +19,7 @@ function HomePage({ token, onLogout }) {
   const [error, setError] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');  const [availableCategories, setAvailableCategories] = useState(['All']);
+  const [selectedNote, setSelectedNote] = useState(null);
 
   // --- Data Fetching ---
   const fetchNotes = useCallback(async (currentToken) => {
@@ -125,8 +128,8 @@ function HomePage({ token, onLogout }) {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-purple-50">
-      <div className="max-w-5xl mx-auto p-4 md:p-8">
+    <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-purple-100 pb-10">
+      <div className="max-w-3xl mx-auto px-4">
         <Header onLogout={onLogout} />
 
         {error && (
@@ -201,11 +204,17 @@ function HomePage({ token, onLogout }) {
                 note={note}
                 onDelete={deleteNote}
                 isLoading={isLoading}
+                onViewDetail={() => setSelectedNote(note)}
               />
             ))}
           </div>
         </div>
+
+        {/* Note detail modal */}
+        <NoteDetailModal note={selectedNote} onClose={() => setSelectedNote(null)} />
       </div>
+      {/* Chat Assistant only on HomePage */}
+      <ChatAssistant token={token} />
     </div>
   );
 }
