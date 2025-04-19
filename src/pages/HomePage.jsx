@@ -109,7 +109,13 @@ function HomePage({ token, onLogout }) {
     setIsLoading(true);
     setError(null);
     try {
-      await apiRequest(`/notes/${noteId}`, 'PUT', editData, token);
+      // Map 'content' to 'text' for backend compatibility
+      const payload = { ...editData };
+      if (payload.content) {
+        payload.text = payload.content;
+        delete payload.content;
+      }
+      await apiRequest(`/notes/${noteId}`, 'PUT', payload, token);
       await fetchNotes(token); // Refresh notes after edit
     } catch (err) {
       setError(err.message);
