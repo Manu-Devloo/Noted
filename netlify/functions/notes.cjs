@@ -80,7 +80,7 @@ const updateCategories = async (username, newCategories) => {
 };
 
 
-// OpenAI Prompt - No change needed here, still takes categories as input
+// OpenAI Prompt - Now explicitly instructs to preserve line breaks
 const createOpenAIPrompt = (noteContent, existingCategories) => `
 You are an assistant that processes handwritten or typed notes and converts them into structured JSON.
 
@@ -95,7 +95,7 @@ If none of these categories seem appropriate, you can use the category "Miscella
 Return everything in the following JSON format:
 {
 "title": "Concise title for the note",
-"content": "Full extracted content here...",
+"content": "Full extracted content here... (PRESERVE ALL ORIGINAL LINE BREAKS AND FORMATTING)",
 "summary": "Short summary here...",
 "categories": ["Category1", "Category2"]
 }
@@ -487,6 +487,67 @@ exports.handler = async (event, context) => {
                 console.error('OpenAI API Error during append:', error.response.status, error.response.data);
             }
             return { statusCode: 500, body: JSON.stringify({ message: 'Failed to append to note.' }) };
+        }
+    }
+
+    // Edit a note (PUT or PATCH)
+    if (path.startsWith('/') && path.length > 1 && (method === 'PUT' || method === 'PATCH')) {
+        const noteId = path.substring(1); // Remove leading '/'
+        let contentType = event.headers['content-type'] || '';
+        if (!contentType.startsWith('application/json')) {
+            return { statusCode: 400, body: JSON.stringify({ message: 'Unsupported content type. Use application/json' }) };
+        }
+        try {
+            const body = JSON.parse(event.body);
+            const existingNote = await notesStore.get(noteId, { type: 'json' });
+            if (!existingNote) {
+                return { statusCode: 404, body: JSON.stringify({ message: 'Note not found' }) };
+            }
+            let updatedNote = { ...existingNote };
+            // If editing text fields
+            if (body.text) updatedNote.content = body.text;
+            if (body.title) updatedNote.title = body.title;
+            if (body.summary) updatedNote.summary = body.summary;
+            if (body.categories) updatedNote.categories = body.categories;
+            // If editing images, process with OpenAI
+            if (body.images && Array.isArray(body.images) && body.images.length > 0) {
+                const existingCategories = await getExistingCategories(username);
+                const contextText = body.context || '';
+                const contentArray = [];
+                if (contextText) {
+                    contentArray.push({ type: 'text', text: createOpenAIPrompt(contextText, existingCategories) });
+                } else {
+                    contentArray.push({ type: 'text', text: createOpenAIPrompt('Image content below:', existingCategories) });
+                }
+                body.images.forEach(image => {
+                    const imageUrl = image.base64.startsWith('data:') ? image.base64 : `data:image/jpeg;base64,${image.base64}`;
+                    contentArray.push({ type: 'image_url', image_url: { url: imageUrl } });
+                });
+                const completion = await openai.chat.completions.create({
+                    model: 'gpt-4o',
+                    messages: [{ role: 'user', content: contentArray }],
+                    max_tokens: 4000,
+                });
+                let noteData;
+                try {
+                    noteData = JSON.parse(completion.choices[0].message.content);
+                } catch (parseError) {
+                    const match = completion.choices[0].message.content.match(/```json\\n([\\s\\S]*?)\\n```/);
+                    if (match && match[1]) {
+                        noteData = JSON.parse(match[1]);
+                    } else {
+                        return { statusCode: 500, body: JSON.stringify({ message: 'Error processing note: Invalid format from AI.' }) };
+                    }
+                }
+                // Merge AI result into note
+                updatedNote = { ...updatedNote, ...noteData };
+            }
+            updatedNote.updatedAt = formatISO(new Date());
+            await notesStore.setJSON(noteId, updatedNote);
+            return { statusCode: 200, body: JSON.stringify({ id: noteId, ...updatedNote }) };
+        } catch (error) {
+            console.error('Error editing note:', error);
+            return { statusCode: 500, body: JSON.stringify({ message: 'Failed to edit note.' }) };
         }
     }
 

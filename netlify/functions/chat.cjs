@@ -30,30 +30,12 @@ const verifyToken = (event) => {
 async function fetchAllNotes(username) {
   const notesStore = getNotesStore(username);
   const list = await notesStore.list();
-  const notes = [];
-  for (const key of list.blobs) {
-    try {
-      const note = await notesStore.get(key, { type: 'json' });
+  const notes = [];for (const item of list.blobs) {try {
+      const note = await notesStore.get(item.key, { type: 'json' });
       if (note) notes.push(note);
     } catch (e) { /* skip errors */ }
   }
   return notes;
-}
-
-// Build prompt for LLM
-function buildPrompt(notes, userMessage) {
-  const today = new Date().toISOString().split('T')[0];
-  let notesText = notes.map(n => `Title: ${n.title || 'Untitled'}\nContent: ${n.content}\nSummary: ${n.summary || ''}\nCategories: ${(n.categories||[]).join(', ')}\nCreated: ${n.createdAt || 'unknown'}\nUpdated: ${n.updatedAt || 'unknown'}\n---`).join('\n');
-  
-  console.log('Notes:', notesText); // Debugging line to check the notes
-  
-  return `You are an assistant with access to the user's notes. Today is ${today}.
-Here are all the user's notes:
-${notesText}
-
-The user says: "${userMessage}"
-
-Answer as helpfully as possible, using the notes as context.`; // Debugging line to check the prompt
 }
 
 exports.handler = async (event) => {
@@ -72,19 +54,24 @@ exports.handler = async (event) => {
   } catch {
     return { statusCode: 400, body: JSON.stringify({ message: 'Invalid JSON' }) };
   }
-  const { message } = body;
+  const { message, history } = body;
   if (!message) {
     return { statusCode: 400, body: JSON.stringify({ message: 'Message is required' }) };
   }
   try {
+    // Always fetch notes for context
     const notes = await fetchAllNotes(username);
-    const prompt = buildPrompt(notes, message);
+    const today = new Date().toISOString().split('T')[0];
+    const notesText = notes.map(n => `Title: ${n.title || 'Untitled'}\nContent: ${n.content}\nSummary: ${n.summary || ''}\nCategories: ${(n.categories||[]).join(', ')}\nCreated: ${n.createdAt || 'unknown'}\nUpdated: ${n.updatedAt || 'unknown'}\n---`).join('\n');
+    const systemPrompt = `You are an assistant with access to the user's notes. Today is ${today}.\nHere are all the user's notes:\n${notesText}\n\nInstructions: Answer as helpfully as possible, using the notes as context. If the user asks about something not in the notes, say so.`;
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      ...(Array.isArray(history) ? history : []),
+      { role: 'user', content: message }
+    ];
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o',
-      messages: [
-        { role: 'system', content: 'You are a helpful assistant for a note-taking app.' },
-        { role: 'user', content: prompt }
-      ],
+      messages,
       max_tokens: 500,
       temperature: 0.7
     });

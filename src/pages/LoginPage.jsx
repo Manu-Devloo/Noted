@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import PropTypes from 'prop-types';
-
-const API_BASE = '/.netlify/functions';
+import { apiRequest } from '../api';
 
 function LoginPage({ setToken }) {
   const [username, setUsername] = useState('');
@@ -15,26 +14,15 @@ function LoginPage({ setToken }) {
     e.preventDefault();
     setIsLoading(true);
     setAuthError(null);
-    
+
     const endpoint = isRegistering ? '/create-user' : '/login';
-    const body = isRegistering 
+    const body = isRegistering
       ? { username, password, adminToken }
       : { username, password };
 
     try {
-      const response = await fetch(`${API_BASE}${endpoint}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.message || `Authentication failed (${response.status})`);
-      }
-
+      const data = await apiRequest(endpoint, 'POST', body);
       if (isRegistering) {
-        // If registration is successful, maybe switch to login view or show success message
         alert(`User ${data.username} created successfully! Please log in.`);
         setIsRegistering(false);
         setUsername('');

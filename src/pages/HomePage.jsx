@@ -7,8 +7,7 @@ import FilterControls from '../components/FilterControls';
 import NoteItem from '../components/NoteItem';
 import NoteDetailModal from '../components/NoteDetailModal';
 import ChatAssistant from '../components/ChatAssistant';
-
-const API_BASE = '/.netlify/functions';
+import { apiRequest } from '../api';
 
 function HomePage({ token, onLogout }) {
   const [notes, setNotes] = useState([]);
@@ -27,45 +26,30 @@ function HomePage({ token, onLogout }) {
     setIsLoadingNotes(true);
     setError(null);
     try {
-      const response = await fetch(`${API_BASE}/notes`, {
-        headers: { 'Authorization': `Bearer ${currentToken}` },
-      });
-      if (!response.ok) {
-        if (response.status === 401) {
-          onLogout();
-          throw new Error('Session expired. Please log in again.');
-        }
-        throw new Error(`Failed to fetch notes (${response.status})`);
-      }
-      const data = await response.json();
+      const data = await apiRequest('/notes', 'GET', null, currentToken);
       setNotes(data);
     } catch (err) {
-      console.error("Error fetching notes:", err);
-      setError(err.message);
+      if (err.message && err.message.toLowerCase().includes('401')) {
+        onLogout();
+        setError('Session expired. Please log in again.');
+      } else {
+        setError(err.message);
+      }
       setNotes([]);
     } finally {
       setIsLoadingNotes(false);
     }
   }, [onLogout]);
-    const fetchCategories = useCallback(async (currentToken) => {
+
+  const fetchCategories = useCallback(async (currentToken) => {
     if (!currentToken) return;
     setIsLoadingCategories(true);
     try {
-      // Use the notes/categories endpoint in the main notes function
-      const response = await fetch(`${API_BASE}/get-categories`, {
-        headers: { 'Authorization': `Bearer ${currentToken}` },
-      });
-      if (!response.ok) {
-         if (response.status === 401) {
-           console.warn('Session expired while fetching categories.');
-         }
-        throw new Error(`Failed to fetch categories (${response.status})`);
-      }
-      const data = await response.json();
+      const data = await apiRequest('/get-categories', 'GET', null, currentToken);
       const sortedCategories = Array.isArray(data) ? ['All', ...data.filter(cat => cat !== 'All').sort()] : ['All'];
       setAvailableCategories(sortedCategories);
-    } catch (err) {
-      console.error("Category fetch error:", err.message);
+    // eslint-disable-next-line no-unused-vars
+    } catch (_) {
       setAvailableCategories(['All']);
     } finally {
       setIsLoadingCategories(false);
@@ -110,18 +94,26 @@ function HomePage({ token, onLogout }) {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch(`${API_BASE}/notes/${id}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` },
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.message || `Failed to delete note (${response.status})`);
-      }
+      await apiRequest(`/notes/${id}`, 'DELETE', null, token);
       setNotes(prevNotes => prevNotes.filter(note => note.id !== id));
     } catch (err) {
       console.error("Error deleting note:", err);
       setError(err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Add note editing handler
+  const handleEditNote = async (noteId, editData) => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      await apiRequest(`/notes/${noteId}`, 'PUT', editData, token);
+      await fetchNotes(token); // Refresh notes after edit
+    } catch (err) {
+      setError(err.message);
+      throw err;
     } finally {
       setIsLoading(false);
     }
@@ -211,7 +203,7 @@ function HomePage({ token, onLogout }) {
         </div>
 
         {/* Note detail modal */}
-        <NoteDetailModal note={selectedNote} onClose={() => setSelectedNote(null)} />
+        <NoteDetailModal note={selectedNote} onClose={() => setSelectedNote(null)} onEdit={handleEditNote} />
       </div>
       {/* Chat Assistant only on HomePage */}
       <ChatAssistant token={token} />
